@@ -54,10 +54,22 @@ maccleaner/
 - macOS (Apple Silicon or Intel)
 - Go 1.22+
 
-### Build from source
+### Build and Install Globally
+To install `maccleaner` as a global command on your Mac:
 ```bash
-git clone https://github.com/your-username/maccleaner.git
-cd maccleaner
+# Installs to ~/.local/bin/maccleaner
+make install
+```
+
+Now you can run `maccleaner` directly from any folder in your terminal!
+
+To uninstall at any time:
+```bash
+make uninstall
+```
+
+### Manual Build
+```bash
 go build -o bin/maccleaner ./cmd/maccleaner
 ```
 
