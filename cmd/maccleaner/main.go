@@ -1,20 +1,21 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"maccleaner/internal/deleter"
 	"maccleaner/internal/report"
 	"maccleaner/internal/scanner"
+	"maccleaner/internal/ui"
 )
 
 var (
@@ -246,14 +247,30 @@ func runClean(ctx context.Context, cmd *cobra.Command) error {
 
 	// 1. Dry Run Mode
 	if dryRun {
-		fmt.Println("\n=========================================================================================")
-		fmt.Println("                       maccleaner clean - DRY-RUN SIMULATION")
-		fmt.Println("=========================================================================================")
+		fmt.Println()
+		header := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(report.PureWhite).
+			Background(report.AmberWarn).
+			Padding(0, 2).
+			Render("🛡️  maccleaner clean - DRY-RUN SIMULATION")
+		fmt.Println(header)
+		fmt.Println()
+
 		for i, cat := range categories {
-			fmt.Printf(" [%d] %-42s: %d items (%s)\n", i+1, cat.Name, cat.Count, report.FormatBytes(cat.Size))
+			fmt.Printf(" [%d] %-42s: %s (%s)\n",
+				i+1,
+				lipgloss.NewStyle().Bold(true).Render(cat.Name),
+				lipgloss.NewStyle().Foreground(report.AccentCyan).Render(fmt.Sprintf("%d items", cat.Count)),
+				lipgloss.NewStyle().Foreground(report.GreenAccent).Bold(true).Render(report.FormatBytes(cat.Size)),
+			)
 		}
-		fmt.Println("-----------------------------------------------------------------------------------------")
-		fmt.Printf("  • Total Safe Candidates: %d items (%s)\n", totalCount, report.FormatBytes(totalSize))
+		fmt.Println("\n" + strings.Repeat("─", 78))
+		fmt.Printf("  • Total Safe Candidates: %s\n",
+			lipgloss.NewStyle().Foreground(report.GreenAccent).Bold(true).Render(
+				fmt.Sprintf("%d items (%s)", totalCount, report.FormatBytes(totalSize)),
+			),
+		)
 
 		// Check candidates against deny list
 		var allCandidates []deleter.DeleteCandidate
@@ -268,12 +285,12 @@ func runClean(ctx context.Context, cmd *cobra.Command) error {
 		if len(delRes.Errors) > 0 {
 			fmt.Printf("  • Protected paths skipped by Deny-List: %d\n", len(delRes.Errors))
 		}
-		fmt.Println("-----------------------------------------------------------------------------------------")
-		fmt.Println("🛡️  [DRY-RUN COMPLETE] No files were moved or deleted.")
+		fmt.Println(strings.Repeat("─", 78))
+		fmt.Println(lipgloss.NewStyle().Foreground(report.AmberWarn).Bold(true).Render("🛡️  [DRY-RUN COMPLETE] No files were moved or deleted."))
 		fmt.Println("👉  To delete interactively:       maccleaner clean")
 		fmt.Println("👉  To delete all without prompt:  maccleaner clean --yes")
 		if !deepScan {
-			fmt.Println("💡  Run with '--deep' to also scan for dormant node_modules and build artifacts!")
+			fmt.Println(lipgloss.NewStyle().Foreground(report.MutedGray).Render("💡  Run with '--deep' to also scan for dormant node_modules and build artifacts!"))
 		}
 		fmt.Println()
 		return nil
@@ -296,79 +313,39 @@ func runClean(ctx context.Context, cmd *cobra.Command) error {
 		return nil
 	}
 
-	// 3. Interactive Category Selection
-	fmt.Println("\n=========================================================================================")
-	fmt.Println("                          maccleaner clean - Selection Menu")
-	fmt.Println("=========================================================================================")
-	for i, cat := range categories {
-		fmt.Printf("  [%d] %-42s %d items (%s)\n", i+1, cat.Name, cat.Count, report.FormatBytes(cat.Size))
-	}
-	fmt.Println("-----------------------------------------------------------------------------------------")
-	fmt.Printf("  Total available to clean: %d items (%s)\n\n", totalCount, report.FormatBytes(totalSize))
-
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Print("Select categories to clean (e.g. '1,2', 'a' for all, or 'q' to quit) [a]: ")
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(input)
-
-	if strings.ToLower(input) == "q" {
-		fmt.Println("Aborted. No files were touched.")
-		return nil
+	// 3. Interactive Bubble Tea TUI
+	var uiItems []ui.Item
+	for _, cat := range categories {
+		uiItems = append(uiItems, ui.Item{
+			Name:       cat.Name,
+			Count:      cat.Count,
+			Size:       cat.Size,
+			Selected:   true,
+			Candidates: cat.Candidates,
+		})
 	}
 
-	var selectedCategories []cleanCategory
-	if input == "" || strings.ToLower(input) == "a" || strings.ToLower(input) == "all" {
-		selectedCategories = categories
-	} else {
-		indices := strings.Split(input, ",")
-		for _, s := range indices {
-			idx, err := strconv.Atoi(strings.TrimSpace(s))
-			if err != nil || idx < 1 || idx > len(categories) {
-				fmt.Printf("Invalid category index: %q. Operation cancelled.\n", s)
-				return nil
-			}
-			selectedCategories = append(selectedCategories, categories[idx-1])
-		}
+	p := tea.NewProgram(ui.NewModel(uiItems, del))
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("UI error: %w", err)
 	}
-
-	var selectedCandidates []deleter.DeleteCandidate
-	var selectedSize int64
-	for _, cat := range selectedCategories {
-		selectedCandidates = append(selectedCandidates, cat.Candidates...)
-		selectedSize += cat.Size
-	}
-
-	fmt.Printf("\nYou have selected %d categories (%d items, %s).\n",
-		len(selectedCategories), len(selectedCandidates), report.FormatBytes(selectedSize))
-	fmt.Printf("These items will be moved safely to ~/.Trash (recoverable via Finder).\n")
-	fmt.Print("Are you sure you want to proceed? [y/N]: ")
-
-	confirm, _ := reader.ReadString('\n')
-	confirm = strings.TrimSpace(strings.ToLower(confirm))
-
-	if confirm != "y" && confirm != "yes" {
-		fmt.Println("Aborted. No files were modified.")
-		return nil
-	}
-
-	fmt.Println("\n🚀 Moving selected items to ~/.Trash...")
-	delRes, err := del.DeleteBatch(selectedCandidates, false)
-	if err != nil {
-		return fmt.Errorf("deletion failed: %w", err)
-	}
-
-	printCleanSummary(delRes, del.LogFile)
 	return nil
 }
 
 func printCleanSummary(delRes *deleter.DeleteResult, logPath string) {
-	fmt.Println("\n-----------------------------------------------------------------------------------------")
-	fmt.Println("Cleanup Summary:")
-	fmt.Printf("  • Safely Moved to Trash: %d items (%s)\n", delRes.DeletedCount, report.FormatBytes(delRes.DeletedSize))
+	fmt.Println("\n" + strings.Repeat("─", 78))
+	header := lipgloss.NewStyle().Bold(true).Foreground(report.GreenAccent).Render("✨ Cleanup Summary:")
+	fmt.Println(header)
+	fmt.Printf("  • Safely Moved to Trash: %s\n",
+		lipgloss.NewStyle().Bold(true).Foreground(report.GreenAccent).Render(
+			fmt.Sprintf("%d items (%s)", delRes.DeletedCount, report.FormatBytes(delRes.DeletedSize)),
+		),
+	)
 	if delRes.SkippedCount > 0 {
 		fmt.Printf("  • Skipped / Inaccessible: %d items (%s)\n", delRes.SkippedCount, report.FormatBytes(delRes.SkippedSize))
 	}
-	fmt.Printf("  • Audit Log:              %s\n", logPath)
-	fmt.Println("-----------------------------------------------------------------------------------------")
-	fmt.Println("✅ Done! You can empty your Trash when you're ready, or restore items with 'Put Back'.")
+	fmt.Printf("  • Audit Log:              %s\n", lipgloss.NewStyle().Foreground(report.AccentCyan).Render(logPath))
+	fmt.Println(strings.Repeat("─", 78))
+	fmt.Println(lipgloss.NewStyle().Foreground(report.GreenAccent).Render("✅ Done! You can empty your Trash when you're ready, or restore items with 'Put Back'."))
+	fmt.Println()
 }
