@@ -282,8 +282,9 @@ func (m Model) View() string {
 		boxContent := fmt.Sprintf(
 			"⚠️  %s\n\n"+
 				"You are about to move %s to %s.\n\n"+
-				"• Safe & Reversible: All items are moved to Trash with macOS 'Put Back' intact.\n"+
+				"• Safe & Reversible: All items are moved to Trash (recoverable from ~/.Trash).\n"+
 				"• Deny-List Checked: System & SIP directories are untouched.\n"+
+				"• No password prompts: files needing elevation are skipped and summarized.\n"+
 				"• Audit Log: Recorded in ~/.maccleaner/deletions.log\n\n"+
 				"Press %s or %s to proceed, or %s / %s to go back.",
 			lipgloss.NewStyle().Bold(true).Foreground(WarningColor).Render("Confirm Safe Deletion"),
@@ -300,13 +301,23 @@ func (m Model) View() string {
 				fmt.Sprintf("❌ Error during cleanup: %v\n", m.Err),
 			))
 		} else if m.Result != nil {
+			var extra string
+			if m.Result.SkippedCount > 0 {
+				extra += fmt.Sprintf("\n• Skipped / Inaccessible: %d items (%s)",
+					m.Result.SkippedCount, report.FormatBytes(m.Result.SkippedSize))
+			}
+			if m.Result.PermissionDeniedCount > 0 {
+				extra += fmt.Sprintf("\n• Needs elevation (skipped, no prompts): %d items (%s)\n  Re-run with sudo to include them.",
+					m.Result.PermissionDeniedCount, report.FormatBytes(m.Result.PermissionDeniedSize))
+			}
 			resBox := fmt.Sprintf(
 				"✨ %s\n\n"+
-					"• Safely moved to Trash: %s\n"+
+					"• Safely moved to Trash: %s%s\n"+
 					"• Audit Log:              %s\n\n"+
-					"You can empty your Trash when ready or restore any file via Finder.",
+					"You can empty your Trash when ready.",
 				lipgloss.NewStyle().Bold(true).Foreground(SuccessColor).Render("Cleanup Completed Successfully!"),
 				lipgloss.NewStyle().Bold(true).Foreground(SuccessColor).Render(fmt.Sprintf("%d items (%s)", m.Result.DeletedCount, report.FormatBytes(m.Result.DeletedSize))),
+				extra,
 				lipgloss.NewStyle().Foreground(SecondaryColor).Render(m.Del.LogFile),
 			)
 			sb.WriteString(BorderBox.Render(resBox) + "\n")

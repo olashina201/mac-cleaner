@@ -344,8 +344,20 @@ func printCleanSummary(delRes *deleter.DeleteResult, logPath string) {
 	if delRes.SkippedCount > 0 {
 		fmt.Printf("  • Skipped / Inaccessible: %d items (%s)\n", delRes.SkippedCount, report.FormatBytes(delRes.SkippedSize))
 	}
+	if delRes.PermissionDeniedCount > 0 {
+		fmt.Printf("  • Needs elevation (skipped, no password prompts): %d items (%s)\n",
+			delRes.PermissionDeniedCount, report.FormatBytes(delRes.PermissionDeniedSize))
+		fmt.Println(lipgloss.NewStyle().Foreground(report.AmberWarn).Render(
+			"    Hint: re-run with sudo to include them, or leave them to keep protected files untouched."))
+	}
+	for _, e := range delRes.Errors {
+		fmt.Printf("    • %s\n", lipgloss.NewStyle().Foreground(report.MutedGray).Render(e))
+	}
+	if delRes.TruncatedErrors {
+		fmt.Printf("    • … and more (counts above are exact; showing first %d details)\n", len(delRes.Errors))
+	}
 	fmt.Printf("  • Audit Log:              %s\n", lipgloss.NewStyle().Foreground(report.AccentCyan).Render(logPath))
 	fmt.Println(strings.Repeat("─", 78))
-	fmt.Println(lipgloss.NewStyle().Foreground(report.GreenAccent).Render("✅ Done! You can empty your Trash when you're ready, or restore items with 'Put Back'."))
+	fmt.Println(lipgloss.NewStyle().Foreground(report.GreenAccent).Render("✅ Done! You can empty your Trash when you're ready."))
 	fmt.Println()
 }
